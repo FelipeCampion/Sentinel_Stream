@@ -4,12 +4,14 @@ go
 use sentinel_stream;
 go
 
+-- Criação da tabela de tipo de sensores
 create table tipo_sensor(
 id_tipo int identity(1,1) primary key,
 nome_tipo varchar(50) not null unique,
 unidade_medida varchar(20) not null 
 );
 
+-- Criação da tabela de sensores
 create table sensores(
 id_sensor int identity(1,1) primary key,
 nome_sensor varchar(100) not null,
@@ -19,6 +21,7 @@ id_tipo int,
 status_sensor varchar(20) not null default 'ativo'
 );
 
+-- Criação da tabela de leituras telemétricas
 create table leituras_telemetria(
 id_leitura bigint identity(1,1) primary key,
 id_sensor int not null,
@@ -26,6 +29,7 @@ valor_leitura decimal(10,4) not null,
 data_leitura datetime2 default sysutcdatetime()
 );
 
+-- Criação da tabela de set das regras de monitoramento
 create table regras_monitoramento(
 id_regra int identity(1,1) primary key,
 id_sensor int not null,
@@ -35,12 +39,14 @@ id_mensagem int not null,
 nivel_severidade varchar(20)
 );
 
+-- Criação da tabela de registro de mensagem padrão
 create table mensagens_padrao(
 id_mensagem int identity(1,1) primary key,
 codigo_alerta varchar(20) not null unique, 
 texto_mensagem varchar(255) not null 
 );
 
+-- Criação da tabela de alertas do sistema
 create table alertas_sistema(
 id_alerta int identity(1,1) primary key,
 id_sensor int,
@@ -50,6 +56,7 @@ data_alerta datetime2 default sysutcdatetime(),
 status_alerta varchar(20) default 'pendente'
 );
 
+-- Criação da tabela de registro de status dos sensores
 create table log_status_sensor(
 id_log int identity(1,1) primary key,
 id_sensor int not null,
@@ -60,6 +67,8 @@ data_mudanca datetime2 default sysutcdatetime()
 
 go
 
+
+-- Criação das pontes de ligação (FKs)
 alter table sensores 
 add constraint chk_status_sensor check (status_sensor in ('ativo', 'inativo', 'manutenção', 'sem sinal')),
 add constraint fk_sens_tipo foreign key (id_tipo) references tipo_sensor(id_tipo);
@@ -79,10 +88,14 @@ add constraint fk_alerta_msg foreign key (id_mensagem) references mensagens_padr
 alter table log_status_sensor 
 add constraint fk_log_sensor foreign key (id_sensor) references sensores(id_sensor);
 
+-- Criação dos index's para melhor manutenção do sistema no futuro
 create index idx_data_leitura on leituras_telemetria(data_leitura);
 create index idx_sensor_leitura on leituras_telemetria(id_sensor, data_leitura);
 go
 
+-- Criação das triggers
+
+-- Criação da trigger que possibilita diferentes armazenamentos de sensores e diferentes métricas de leitura
 create trigger trg_sentinela_omni
 on leituras_telemetria
 after insert
@@ -101,6 +114,7 @@ begin
 end;
 go
 
+-- Criação da triggert de registro de status dos sensores
 create trigger trg_log_status_sensor
 on sensores
 after update
@@ -120,6 +134,7 @@ begin
 end;
 go
 
+-- Criação da procedure de mudança dos status de alertas
 create procedure sp_resolver_alerta
     @id_alerta int,
     @novo_status varchar(20) = 'resolvido'
@@ -133,6 +148,7 @@ begin
 end;
 go
 
+-- Criação da procedure de relatório dos sensores
 create procedure sp_relatorio_sensor
     @id_sensor int,
     @data_inicio datetime2,
@@ -155,6 +171,7 @@ begin
 end;
 go
 
+-- Criação da view do painel de alertas
 go
 create view v_painel_alertas as
 select 
