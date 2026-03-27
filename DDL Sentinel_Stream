@@ -1,0 +1,172 @@
+create database sentinel_stream;
+go
+
+use sentinel_stream;
+go
+
+create table tipo_sensor(
+id_tipo int identity(1,1) primary key,
+nome_tipo varchar(50) not null unique,
+unidade_medida varchar(20) not null 
+);
+
+create table sensores(
+id_sensor int identity(1,1) primary key,
+nome_sensor varchar(100) not null,
+latitude decimal(10, 8) not null,
+longitude decimal(11, 8) not null,
+id_tipo int,
+status_sensor varchar(20) not null default 'ativo'
+);
+
+create table leituras_telemetria(
+id_leitura bigint identity(1,1) primary key,
+id_sensor int not null,
+valor_leitura decimal(10,4) not null,
+data_leitura datetime2 default sysutcdatetime()
+);
+
+create table regras_monitoramento(
+id_regra int identity(1,1) primary key,
+id_sensor int not null,
+limite_minimo decimal(10,4),
+limite_maximo decimal(10,4),
+id_mensagem int not null,
+nivel_severidade varchar(20)
+);
+
+create table mensagens_padrao(
+id_mensagem int identity(1,1) primary key,
+codigo_alerta varchar(20) not null unique, 
+texto_mensagem varchar(255) not null 
+);
+
+create table alertas_sistema(
+id_alerta int identity(1,1) primary key,
+id_sensor int,
+id_mensagem int,
+tipo_alerta varchar(50), 
+data_alerta datetime2 default sysutcdatetime(),
+status_alerta varchar(20) default 'pendente'
+);
+
+create table log_status_sensor(
+id_log int identity(1,1) primary key,
+id_sensor int not null,
+status_anterior varchar(20),
+status_novo varchar(20),
+data_mudanca datetime2 default sysutcdatetime()
+);
+
+go
+
+alter table sensores 
+add constraint chk_status_sensor check (status_sensor in ('ativo', 'inativo', 'manutenção', 'sem sinal')),
+add constraint fk_sens_tipo foreign key (id_tipo) references tipo_sensor(id_tipo);
+
+alter table regras_monitoramento 
+add constraint chk_nivel_severidade check (nivel_severidade in ('baixa', 'média', 'alta', 'crítica')),
+add constraint fk_regra_sensor foreign key (id_sensor) references sensores(id_sensor),
+add constraint fk_regra_msg foreign key (id_mensagem) references mensagens_padrao(id_mensagem);
+
+alter table leituras_telemetria 
+add constraint fk_lei_sens foreign key (id_sensor) references sensores(id_sensor);
+
+alter table alertas_sistema 
+add constraint fk_alerta_sensor foreign key (id_sensor) references sensores(id_sensor),
+add constraint fk_alerta_msg foreign key (id_mensagem) references mensagens_padrao(id_mensagem);
+
+alter table log_status_sensor 
+add constraint fk_log_sensor foreign key (id_sensor) references sensores(id_sensor);
+
+create index idx_data_leitura on leituras_telemetria(data_leitura);
+create index idx_sensor_leitura on leituras_telemetria(id_sensor, data_leitura);
+go
+
+create trigger trg_sentinela_omni
+on leituras_telemetria
+after insert
+as
+begin
+    insert into alertas_sistema (id_sensor, tipo_alerta, id_mensagem, status_alerta)
+    select 
+        i.id_sensor,
+        r.nivel_severidade,
+        r.id_mensagem,
+        'pendente'
+    from inserted i
+    inner join regras_monitoramento r on i.id_sensor = r.id_sensor
+    where i.valor_leitura > r.limite_maximo 
+       or i.valor_leitura < r.limite_minimo;
+end;
+go
+
+create trigger trg_log_status_sensor
+on sensores
+after update
+as
+begin
+    if update(status_sensor)
+    begin
+        insert into log_status_sensor (id_sensor, status_anterior, status_novo)
+        select 
+            i.id_sensor,
+            d.status_sensor,
+            i.status_sensor
+        from inserted i
+        inner join deleted d on i.id_sensor = d.id_sensor
+        where i.status_sensor <> d.status_sensor;
+    end
+end;
+go
+
+create procedure sp_resolver_alerta
+    @id_alerta int,
+    @novo_status varchar(20) = 'resolvido'
+as
+begin
+    update alertas_sistema
+    set status_alerta = @novo_status
+    where id_alerta = @id_alerta;
+
+    select 'alerta ' + cast(@id_alerta as varchar) + ' atualizado para ' + @novo_status as resultado;
+end;
+go
+
+create procedure sp_relatorio_sensor
+    @id_sensor int,
+    @data_inicio datetime2,
+    @data_fim datetime2
+as
+begin
+    select 
+        s.nome_sensor,
+        t.nome_tipo,
+        count(l.id_leitura) as total_leituras,
+        avg(l.valor_leitura) as media_valor,
+        min(l.valor_leitura) as valor_minimo,
+        max(l.valor_leitura) as valor_maximo
+    from sensores s
+    inner join tipo_sensor t on s.id_tipo = t.id_tipo
+    left join leituras_telemetria l on s.id_sensor = l.id_sensor
+    where s.id_sensor = @id_sensor
+      and l.data_leitura between @data_inicio and @data_fim
+    group by s.nome_sensor, t.nome_tipo;
+end;
+go
+
+go
+create view v_painel_alertas as
+select 
+    a.id_alerta,
+    s.nome_sensor,
+    t.nome_tipo as tipo_sensor,
+    m.texto_mensagem,
+    a.tipo_alerta as severidade,
+    a.data_alerta,
+    a.status_alerta
+from alertas_sistema a
+inner join sensores s on a.id_sensor = s.id_sensor
+inner join mensagens_padrao m on a.id_mensagem = m.id_mensagem
+inner join tipo_sensor t on s.id_tipo = t.id_tipo;
+go
